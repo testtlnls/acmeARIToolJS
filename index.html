@@ -1,0 +1,181 @@
+<html>
+<head>
+
+<script>
+
+function base64url(str){
+	return btoa(str).replace(/\//g,'_').replace(/\+/g,'-').replace(/\=/g,'');
+};
+
+function setEndpoint(xhr){
+	directoryRes.value = xhr.responseText;
+	directory = JSON.parse(xhr.responseText);
+};
+
+async function requestStatus(){
+	if("a"=="b"){
+		void(0);
+	}
+	else{
+		const directoryF = await fetch(endpointSelect.value);
+		const directory = await directoryF.json();
+		if(directory.renewalInfo.slice(-1)!="/"){directory.renewalInfo=directory.renewalInfo+"/";};
+		/* directoryRes.value = JSON.stringify(directory,null,"\t"); */
+		const certID = await genCertID(); /* genCertID uses WebCryptoAPI */
+		const resF = await fetch(directory.renewalInfo+base64url(certID));
+		directoryRes.value = await resF.text();
+	};
+};
+
+function decodeLength(der,pos){
+	const topBit = der.slice(pos,pos+1).charCodeAt();
+	const borderSize = ("\x80").charCodeAt();
+	const lengthSize = topBit-borderSize+1;
+	let j,res=0;
+	if( topBit > borderSize ){
+		for(let i=0;i<lengthSize-1;i++){
+			j = der.slice(pos+1+i,pos+2+i).charCodeAt();
+			res += j * Math.pow(256,lengthSize-2-i);
+		};
+		return {
+			length : res,
+			lengthSize : lengthSize
+		};
+	}
+	else{
+		return {
+			length : topBit,
+			lengthSize : 1
+		};
+	};
+};
+
+function encodeLength(length){
+	const borderSize = ("\x80").charCodeAt();
+	if( length > borderSize ){
+		const lengthSize = Math.floor(Math.log(length) / Math.log(256))+1;
+		let res = String.fromCharCode(lengthSize+borderSize);
+		let k, j = length;
+		for(let i=0;i<lengthSize;i++){
+			k = Math.floor(j/Math.pow(256,lengthSize-i-1));
+			res += String.fromCharCode(k);
+			j = j - (j*Math.pow(256,lengthSize-i-1));
+		};
+		return res;
+	}
+	else{return String.fromCharCode(length);};
+};
+
+async function genCertID(){
+	const hashAlg = hashForm.hashInput.value;
+	const issuerDER = atob(issuerInput.value.slice(0,issuerInput.value.indexOf("-----END CERTIFICATE-----")).replace("-----BEGIN CERTIFICATE-----",""));
+	const issuerV3Pos = issuerDER.indexOf("\xA0\x03\x02\x01\x02");
+	const issuerSerialPos = issuerV3Pos+5;
+	const issuerSigAlgPos = issuerDER.slice(issuerSerialPos+1,issuerSerialPos+2).charCodeAt()+issuerSerialPos+2;
+	const issuerIssuerPos = issuerDER.slice(issuerSigAlgPos+1,issuerSigAlgPos+2).charCodeAt()+issuerSigAlgPos+2;
+	const issuerIssuerLength = decodeLength(issuerDER,issuerIssuerPos+1);
+	const issuerValidityPos = issuerIssuerLength.length+issuerIssuerPos+issuerIssuerLength.lengthSize+1;
+	const issuerSubjectPos = issuerDER.slice(issuerValidityPos+1,issuerValidityPos+2).charCodeAt()+issuerValidityPos+2;
+	const issuerSubjectLength = decodeLength(issuerDER,issuerSubjectPos+1);
+	const issuerSubjectHashBuffer =
+		await window.crypto.subtle.digest(
+		{
+			name: hashAlg,
+		},
+			Uint8Array.from(
+				issuerDER.slice(
+					issuerSubjectPos,
+					issuerSubjectPos+issuerSubjectLength.length+issuerSubjectLength.lengthSize+1
+				).split(''),
+				x => x.charCodeAt(0)
+			)
+		);
+	const issuerSubjectHash = Array.from(new Uint8Array(issuerSubjectHashBuffer), x => String.fromCharCode(x)).join('');
+	const issuerKeyPos = issuerSubjectLength.length+issuerSubjectPos+issuerSubjectLength.lengthSize+1;
+	const issuerKeyLength = decodeLength(issuerDER,issuerKeyPos+1);
+	const issuerKeyTypePos = issuerKeyPos+issuerKeyLength.lengthSize+1;
+	const issuerKeyBSPos = issuerDER.slice(issuerKeyTypePos+1,issuerKeyTypePos+2).charCodeAt()+issuerKeyTypePos+2;
+	const issuerKeyBSLength = decodeLength(issuerDER,issuerKeyBSPos+1);
+	const issuerKeyBSInnerPos = issuerKeyBSPos+issuerKeyBSLength.lengthSize+2;
+	const issuerKeyBSInnerLength = issuerKeyBSLength.length-1;
+	const issuerKeyHashBuffer =
+		await window.crypto.subtle.digest(
+		{
+			name: hashAlg,
+		},
+			Uint8Array.from(
+				issuerDER.slice(
+					issuerKeyBSInnerPos,
+					issuerKeyBSInnerPos+issuerKeyBSInnerLength
+				).split(''),
+				x => x.charCodeAt(0)
+			)
+		);
+	const issuerKeyHash = Array.from(new Uint8Array(issuerKeyHashBuffer), x => String.fromCharCode(x)).join('');
+	const der = atob(certInput.value.slice(0,certInput.value.indexOf("-----END CERTIFICATE-----")).replace("-----BEGIN CERTIFICATE-----",""));
+	const v3Pos = der.indexOf("\xA0\x03\x02\x01\x02");
+	const serialPos = v3Pos+5;
+	const serialLength = decodeLength(der,serialPos+1);
+	const serial = der.slice(serialPos,serialPos+serialLength.length+2);
+	let certIDhashAlgId;
+	if(hashAlg == "SHA-1"){
+		certIDhashAlgId = "\x30\x09\x06\x05\x2B\x0E\x03\x02\x1A\x05\x00";
+	}
+	else if(hashAlg == "SHA-256"){
+		certIDhashAlgId = "\x30\x0D\x06\x09\x60\x86\x48\x01\x65\x03\x04\x02\x01\x05\x00";
+	};
+	const certIDInner = certIDhashAlgId
+				+"\x04"+encodeLength(issuerSubjectHash.length)+issuerSubjectHash
+				+"\x04"+encodeLength(issuerKeyHash.length)+issuerKeyHash
+				+serial;
+	const certID = "\x30"+encodeLength(certIDInner.length)+certIDInner;
+	return certID;
+};
+
+</script>
+
+</head>
+
+<body>
+
+<h2>Automated Certificate Management Environment (ACME) Renewal Information (ARI) Extension Tool</h2>
+
+<form id="hashForm" name="hashForm">
+	<label for="sha1Rad"><input type="radio" name="hashInput" id="sha1Rad" value="SHA-1" /> SHA-1</label>
+	<label for="sha256Rad"><input type="radio" name="hashInput" id="sha256Rad" value="SHA-256" checked /> SHA-256</label>
+</form>
+
+<p><select id="endpointSelect">
+	<option value="https://dv.acme-v02.test-api.pki.goog/directory">https://dv.acme-v02.test-api.pki.goog/directory</option>
+	<option value="https://dv-sxg.acme-v02.test-api.pki.goog/directory">https://dv-sxg.acme-v02.test-api.pki.goog/directory</option>
+	<option value="https://dv.acme-v02.api.pki.goog/directory">https://dv.acme-v02.api.pki.goog/directory</option>
+	<option value="https://dv-sxg.acme-v02.api.pki.goog/directory">https://dv-sxg.acme-v02.api.pki.goog/directory</option>
+	<option value="https://acme-staging-v02.api.letsencrypt.org/directory">https://acme-staging-v02.api.letsencrypt.org/directory</option>
+	<option value="https://acme-v02.api.letsencrypt.org/directory" selected>https://acme-v02.api.letsencrypt.org/directory</option>
+	<option value="https://api.test4.buypass.no/acme/directory">https://api.test4.buypass.no/acme/directory</option>
+	<option value="https://api.buypass.com/acme/directory">https://api.buypass.com/acme/directory</option>
+	<option value="https://acme.zerossl.com/v2/DV90">https://acme.zerossl.com/v2/DV90</option>
+	<option value="https://acme.ssl.com/sslcom-dv-ecc">https://acme.ssl.com/sslcom-dv-ecc</option>
+	<option value="https://acme.ssl.com/sslcom-dv-rsa">https://acme.ssl.com/sslcom-dv-rsa</option>
+</select><button onclick="fetch(endpointSelect.value).then(r=>r.text().then(t=>{directoryRes.value=t}))">Set Endpoint</button>
+<a href="javascript:window.open(endpointSelect.value)">Open new window</a>
+</p>
+<textarea id="directoryRes" style="width:800px; height:100px" disabled></textarea>
+
+
+<div style="display:flex">
+<div>
+<p>Cert Input</p>
+<textarea id="certInput" style="width:400px; height:100px"></textarea>
+<script>certInput.placeholder="-----BEGIN CERTIFICATE-----\n\n.....\n\n-----END CERTIFICATE-----";</script>
+</div>
+<div>
+<p>Issuer cert Input</p>
+<textarea id="issuerInput" style="width:400px; height:100px"></textarea>
+<script>issuerInput.placeholder="-----BEGIN CERTIFICATE-----\n\n.....\n\n-----END CERTIFICATE-----";</script>
+</div>
+</div>
+<button onclick="requestStatus()">Request Status</button>
+
+</body>
+</html>
