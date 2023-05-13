@@ -17,12 +17,15 @@ async function requestStatus(){
 		void(0);
 	}
 	else{
+		const certID = await genCertID(); /* genCertID uses WebCryptoAPI */
+		ariCertIDoutElem.value = base64url(certID);
 		const directoryF = await fetch(endpointSelect.value);
 		const directory = await directoryF.json();
 		if(directory.renewalInfo.slice(-1)!="/"){directory.renewalInfo=directory.renewalInfo+"/";};
 		/* directoryRes.value = JSON.stringify(directory,null,"\t"); */
-		const certID = await genCertID(); /* genCertID uses WebCryptoAPI */
-		const resF = await fetch(directory.renewalInfo+base64url(certID));
+		const ariURL = directory.renewalInfo+base64url(certID);
+		ariURLoutElem.value = ariURL;
+		const resF = await fetch(ariURL);
 		directoryRes.value = await resF.text();
 	};
 };
@@ -176,6 +179,10 @@ async function genCertID(){
 </div>
 </div>
 <button onclick="requestStatus()">Request Status</button>
+<p>
+<div>Requested ARI URL : <input id="ariURLoutElem" placeholder='ARI URL will be displayed here AFTER you run "Request Status". CORS is NEEDED.' onfocus="this.select()" style="width:600px;" /></div>
+<div>CertID : <input id="ariCertIDoutElem" placeholder='Base64URLencoded CertID will be displayed here AFTER you run "Request Status".' onfocus="this.select()" style="width:600px;" /></div>
+</p>
 
 </body>
 </html>
