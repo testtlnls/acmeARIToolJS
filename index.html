@@ -17,13 +17,39 @@ async function requestStatus(){
 		void(0);
 	}
 	else{
-		const certID = await genCertID(); /* genCertID uses WebCryptoAPI */
-		ariCertIDoutElem.value = base64url(certID);
+		let certID;
+		if(ocspReqInput.files.length==1){
+			certID = await getCertIDfromOCSPreqFile();
+		}
+		else if(ocspReqInput.files.length>1&&!issuerInput.value){
+			return false;
+		}
+		else{
+			certID = await genCertID(); /* genCertID uses WebCryptoAPI */
+		};
+		if(certID.draft01){
+			ariCertIDoutElem.value = base64url(certID.draft01);
+		}
+		else{
+			ariCertIDoutElem.value = "Issuer cert Input is empty.";
+		};
+		if(certID.draft03){
+			ariCertID3outElem.value = certID.draft03;
+		}
+		else{
+			ariCertID3outElem.value = "OCSP Request Input is detected.";
+		};
 		const directoryF = await fetch(endpointSelect.value);
 		const directory = await directoryF.json();
 		if(directory.renewalInfo.slice(-1)!="/"){directory.renewalInfo=directory.renewalInfo+"/";};
 		/* directoryRes.value = JSON.stringify(directory,null,"\t"); */
-		const ariURL = directory.renewalInfo+base64url(certID);
+		let ariURL;
+		if(certID.draft03){
+			ariURL = directory.renewalInfo + certID.draft03;
+		}
+		else{
+			ariURL = directory.renewalInfo + base64url(certID.draft01);
+		};
 		ariURLoutElem.value = ariURL;
 		const resF = await fetch(ariURL);
 		directoryRes.value = await resF.text();
@@ -71,67 +97,114 @@ function encodeLength(length){
 
 async function genCertID(){
 	const hashAlg = hashForm.hashInput.value;
-	const issuerDER = atob(issuerInput.value.slice(0,issuerInput.value.indexOf("-----END CERTIFICATE-----")).replace("-----BEGIN CERTIFICATE-----",""));
-	const issuerV3Pos = issuerDER.indexOf("\xA0\x03\x02\x01\x02");
-	const issuerSerialPos = issuerV3Pos+5;
-	const issuerSigAlgPos = issuerDER.slice(issuerSerialPos+1,issuerSerialPos+2).charCodeAt()+issuerSerialPos+2;
-	const issuerIssuerPos = issuerDER.slice(issuerSigAlgPos+1,issuerSigAlgPos+2).charCodeAt()+issuerSigAlgPos+2;
-	const issuerIssuerLength = decodeLength(issuerDER,issuerIssuerPos+1);
-	const issuerValidityPos = issuerIssuerLength.length+issuerIssuerPos+issuerIssuerLength.lengthSize+1;
-	const issuerSubjectPos = issuerDER.slice(issuerValidityPos+1,issuerValidityPos+2).charCodeAt()+issuerValidityPos+2;
-	const issuerSubjectLength = decodeLength(issuerDER,issuerSubjectPos+1);
-	const issuerSubjectHashBuffer =
-		await window.crypto.subtle.digest(
-		{
-			name: hashAlg,
-		},
-			Uint8Array.from(
-				issuerDER.slice(
-					issuerSubjectPos,
-					issuerSubjectPos+issuerSubjectLength.length+issuerSubjectLength.lengthSize+1
-				).split(''),
-				x => x.charCodeAt(0)
-			)
-		);
-	const issuerSubjectHash = Array.from(new Uint8Array(issuerSubjectHashBuffer), x => String.fromCharCode(x)).join('');
-	const issuerKeyPos = issuerSubjectLength.length+issuerSubjectPos+issuerSubjectLength.lengthSize+1;
-	const issuerKeyLength = decodeLength(issuerDER,issuerKeyPos+1);
-	const issuerKeyTypePos = issuerKeyPos+issuerKeyLength.lengthSize+1;
-	const issuerKeyBSPos = issuerDER.slice(issuerKeyTypePos+1,issuerKeyTypePos+2).charCodeAt()+issuerKeyTypePos+2;
-	const issuerKeyBSLength = decodeLength(issuerDER,issuerKeyBSPos+1);
-	const issuerKeyBSInnerPos = issuerKeyBSPos+issuerKeyBSLength.lengthSize+2;
-	const issuerKeyBSInnerLength = issuerKeyBSLength.length-1;
-	const issuerKeyHashBuffer =
-		await window.crypto.subtle.digest(
-		{
-			name: hashAlg,
-		},
-			Uint8Array.from(
-				issuerDER.slice(
-					issuerKeyBSInnerPos,
-					issuerKeyBSInnerPos+issuerKeyBSInnerLength
-				).split(''),
-				x => x.charCodeAt(0)
-			)
-		);
-	const issuerKeyHash = Array.from(new Uint8Array(issuerKeyHashBuffer), x => String.fromCharCode(x)).join('');
+	let issuerSubjectHash, issuerKeyHash;
+	if(issuerInput.value){
+		const issuerDER = atob(issuerInput.value.slice(0,issuerInput.value.indexOf("-----END CERTIFICATE-----")).replace("-----BEGIN CERTIFICATE-----",""));
+		const issuerV3Pos = issuerDER.indexOf("\xA0\x03\x02\x01\x02");
+		const issuerSerialPos = issuerV3Pos+5;
+		const issuerSigAlgPos = issuerDER.slice(issuerSerialPos+1,issuerSerialPos+2).charCodeAt()+issuerSerialPos+2;
+		const issuerIssuerPos = issuerDER.slice(issuerSigAlgPos+1,issuerSigAlgPos+2).charCodeAt()+issuerSigAlgPos+2;
+		const issuerIssuerLength = decodeLength(issuerDER,issuerIssuerPos+1);
+		const issuerValidityPos = issuerIssuerLength.length+issuerIssuerPos+issuerIssuerLength.lengthSize+1;
+		const issuerSubjectPos = issuerDER.slice(issuerValidityPos+1,issuerValidityPos+2).charCodeAt()+issuerValidityPos+2;
+		const issuerSubjectLength = decodeLength(issuerDER,issuerSubjectPos+1);
+		const issuerSubjectHashBuffer =
+			await window.crypto.subtle.digest(
+			{
+				name: hashAlg,
+			},
+				Uint8Array.from(
+					issuerDER.slice(
+						issuerSubjectPos,
+						issuerSubjectPos+issuerSubjectLength.length+issuerSubjectLength.lengthSize+1
+					).split(''),
+					x => x.charCodeAt(0)
+				)
+			);
+		issuerSubjectHash = Array.from(new Uint8Array(issuerSubjectHashBuffer), x => String.fromCharCode(x)).join('');
+		const issuerKeyPos = issuerSubjectLength.length+issuerSubjectPos+issuerSubjectLength.lengthSize+1;
+		const issuerKeyLength = decodeLength(issuerDER,issuerKeyPos+1);
+		const issuerKeyTypePos = issuerKeyPos+issuerKeyLength.lengthSize+1;
+		const issuerKeyBSPos = issuerDER.slice(issuerKeyTypePos+1,issuerKeyTypePos+2).charCodeAt()+issuerKeyTypePos+2;
+		const issuerKeyBSLength = decodeLength(issuerDER,issuerKeyBSPos+1);
+		const issuerKeyBSInnerPos = issuerKeyBSPos+issuerKeyBSLength.lengthSize+2;
+		const issuerKeyBSInnerLength = issuerKeyBSLength.length-1;
+		const issuerKeyHashBuffer =
+			await window.crypto.subtle.digest(
+			{
+				name: hashAlg,
+			},
+				Uint8Array.from(
+					issuerDER.slice(
+						issuerKeyBSInnerPos,
+						issuerKeyBSInnerPos+issuerKeyBSInnerLength
+					).split(''),
+					x => x.charCodeAt(0)
+				)
+			);
+		issuerKeyHash = Array.from(new Uint8Array(issuerKeyHashBuffer), x => String.fromCharCode(x)).join('');
+	};
 	const der = atob(certInput.value.slice(0,certInput.value.indexOf("-----END CERTIFICATE-----")).replace("-----BEGIN CERTIFICATE-----",""));
 	const v3Pos = der.indexOf("\xA0\x03\x02\x01\x02");
 	const serialPos = v3Pos+5;
 	const serialLength = decodeLength(der,serialPos+1);
 	const serial = der.slice(serialPos,serialPos+serialLength.length+2);
+	
+	const sigAlgPos = der.slice(serialPos+1,serialPos+2).charCodeAt()+serialPos+2;
+	const issuerPos = der.slice(sigAlgPos+1,sigAlgPos+2).charCodeAt()+sigAlgPos+2;
+	const issuerLength = decodeLength(der,issuerPos+1);
+	const validityPos = issuerLength.length+issuerPos+issuerLength.lengthSize+1;
+	const subjectPos = der.slice(validityPos+1,validityPos+2).charCodeAt()+validityPos+2;
+	const subjectLength = decodeLength(der,subjectPos+1);
+	const keyPos = subjectLength.length+subjectPos+subjectLength.lengthSize+1;
+	const keyLength = decodeLength(der,keyPos+1);
+	const extPos = keyLength.length+keyPos+keyLength.lengthSize+1;
+	const akiPos = der.indexOf("\x06\x03\x55\x1D\x23\x04");
+	const akiLength = decodeLength(der,akiPos+10);
+	const aki = der.slice(akiPos+11,akiPos+11+akiLength.length);
+	const certIDd3 = base64url(aki)+"."+base64url(serial.slice(2));
+	
 	let certIDhashAlgId;
 	if(hashAlg == "SHA-1"){
 		certIDhashAlgId = "\x30\x09\x06\x05\x2B\x0E\x03\x02\x1A\x05\x00";
 	}
 	else if(hashAlg == "SHA-256"){
 		certIDhashAlgId = "\x30\x0D\x06\x09\x60\x86\x48\x01\x65\x03\x04\x02\x01\x05\x00";
+	}
+	else if(hashAlg == "SHA-384"){
+		certIDhashAlgId = "\x30\x0D\x06\x09\x60\x86\x48\x01\x65\x03\x04\x02\x02\x05\x00";
+	}
+	else if(hashAlg == "SHA-512"){
+		certIDhashAlgId = "\x30\x0D\x06\x09\x60\x86\x48\x01\x65\x03\x04\x02\x03\x05\x00";
 	};
-	const certIDInner = certIDhashAlgId
-				+"\x04"+encodeLength(issuerSubjectHash.length)+issuerSubjectHash
-				+"\x04"+encodeLength(issuerKeyHash.length)+issuerKeyHash
-				+serial;
-	const certID = "\x30"+encodeLength(certIDInner.length)+certIDInner;
+	const certID = {};
+	if(issuerInput.value){
+		const certIDInner = certIDhashAlgId
+					+"\x04"+encodeLength(issuerSubjectHash.length)+issuerSubjectHash
+					+"\x04"+encodeLength(issuerKeyHash.length)+issuerKeyHash
+					+serial;
+		certID.draft01 = "\x30"+encodeLength(certIDInner.length)+certIDInner;
+	};
+	certID.draft03 = certIDd3; /* base64url(aki)+"."+base64url(serial.slice(2)) */
+	return certID;
+};
+
+async function getCertIDfromOCSPreqFile(){
+	const f = ocspReqInput.files[0];
+	const der = await ( () => new Promise(resolve => {
+		const r = new FileReader();
+		r.onload = e => resolve(e.target.result);
+		r.readAsBinaryString(f);
+	}) )();
+	const tbsLength = decodeLength(der,1);
+	const tbsPos = tbsLength.lengthSize+1;
+	const tbsInnerLength = decodeLength(der,tbsPos+1);
+	const requestorListPos = tbsPos+tbsInnerLength.lengthSize+1;
+	const requestorListLength = decodeLength(der,requestorListPos+1);
+	const certIDPos = requestorListPos+requestorListLength.lengthSize+1;
+	const certIDLength = decodeLength(der,certIDPos+1);
+	const certID = {};
+	certID.draft01 = der.slice(certIDPos+certIDLength.lengthSize+1,certIDPos+certIDLength.lengthSize+1+certIDLength.length);
 	return certID;
 };
 
@@ -146,6 +219,8 @@ async function genCertID(){
 <form id="hashForm" name="hashForm">
 	<label for="sha1Rad"><input type="radio" name="hashInput" id="sha1Rad" value="SHA-1" /> SHA-1</label>
 	<label for="sha256Rad"><input type="radio" name="hashInput" id="sha256Rad" value="SHA-256" checked /> SHA-256</label>
+	<label for="sha384Rad"><input type="radio" name="hashInput" id="sha384Rad" value="SHA-384" /> SHA-384</label>
+	<label for="sha512Rad"><input type="radio" name="hashInput" id="sha512Rad" value="SHA-512" /> SHA-512</label>
 </form>
 
 <p><select id="endpointSelect">
@@ -178,11 +253,17 @@ async function genCertID(){
 <script>issuerInput.placeholder="-----BEGIN CERTIFICATE-----\n\n.....\n\n-----END CERTIFICATE-----";</script>
 </div>
 </div>
+<p>OCSP Request (DER) :
+<input id="ocspReqInput" type="file" style="border:double 3px black;" />
+</p>
 <button onclick="requestStatus()">Request Status</button>
 <p>
-<div>Requested ARI URL : <input id="ariURLoutElem" placeholder='ARI URL will be displayed here AFTER you run "Request Status". CORS is NEEDED.' onfocus="this.select()" style="width:600px;" /></div>
-<div>CertID : <input id="ariCertIDoutElem" placeholder='Base64URLencoded CertID will be displayed here AFTER you run "Request Status".' onfocus="this.select()" style="width:600px;" /></div>
+<div>Requested ARI URL (draft03) : <input id="ariURLoutElem" placeholder='ARI URL will be displayed here AFTER you run "Request Status". CORS is NEEDED.' onfocus="this.select()" style="width:600px;" /></div>
+<div>CertID (draft-ietf-acme-ari-01) : <input id="ariCertIDoutElem" placeholder='Base64URLencoded CertID will be displayed here AFTER you run "Request Status".' onfocus="this.select()" style="width:600px;" /></div>
+<div>CertID (draft-ietf-acme-ari-03) : <input id="ariCertID3outElem" placeholder='Base64URLencoded CertID will be displayed here AFTER you run "Request Status".' onfocus="this.select()" style="width:600px;" /></div>
 </p>
+
+<h5 align="right"><a href="https://github.com/testtlnls/acmeARIToolJS">GitHub repository</a></h5>
 
 </body>
 </html>
