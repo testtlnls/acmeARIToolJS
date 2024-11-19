@@ -1,0 +1,137 @@
+<html>
+<head>
+
+<script>
+
+function base64url(str){
+	return btoa(str).replace(/\//g,'_').replace(/\+/g,'-').replace(/\=/g,'');
+};
+
+function setEndpoint(xhr){
+	directoryRes.value = xhr.responseText;
+	directory = JSON.parse(xhr.responseText);
+};
+
+async function requestStatus(){
+	if("a"=="b"){
+		void(0);
+	}
+	else{
+		const certID = genCertID();
+		ariCertIDoutElem.value = certID;
+		const directoryF = await fetch(endpointSelect.value);
+		const directory = await directoryF.json();
+		if(directory.renewalInfo.slice(-1)!="/"){directory.renewalInfo=directory.renewalInfo+"/";};
+		/* directoryRes.value = JSON.stringify(directory,null,"\t"); */
+		const ariURL = directory.renewalInfo+certID;
+		ariURLoutElem.value = ariURL;
+		const resF = await fetch(ariURL);
+		directoryRes.value = await resF.text();
+	};
+};
+
+function decodeLength(der,pos){
+	const topBit = der.slice(pos,pos+1).charCodeAt();
+	const borderSize = ("\x80").charCodeAt();
+	const lengthSize = topBit-borderSize+1;
+	let j,res=0;
+	if( topBit > borderSize ){
+		for(let i=0;i<lengthSize-1;i++){
+			j = der.slice(pos+1+i,pos+2+i).charCodeAt();
+			res += j * Math.pow(256,lengthSize-2-i);
+		};
+		return {
+			length : res,
+			lengthSize : lengthSize
+		};
+	}
+	else{
+		return {
+			length : topBit,
+			lengthSize : 1
+		};
+	};
+};
+
+function encodeLength(length){
+	const borderSize = ("\x80").charCodeAt();
+	if( length > borderSize ){
+		const lengthSize = Math.floor(Math.log(length) / Math.log(256))+1;
+		let res = String.fromCharCode(lengthSize+borderSize);
+		let k, j = length;
+		for(let i=0;i<lengthSize;i++){
+			k = Math.floor(j/Math.pow(256,lengthSize-i-1));
+			res += String.fromCharCode(k);
+			j = j - (j*Math.pow(256,lengthSize-i-1));
+		};
+		return res;
+	}
+	else{return String.fromCharCode(length);};
+};
+
+function genCertID(){
+	const der = atob(certInput.value.slice(0,certInput.value.indexOf("-----END CERTIFICATE-----")).replace("-----BEGIN CERTIFICATE-----",""));
+	const v3Pos = der.indexOf("\xA0\x03\x02\x01\x02");
+	const serialPos = v3Pos+5;
+	const serialLength = decodeLength(der,serialPos+1);
+	const serial = der.slice(serialPos,serialPos+serialLength.length+2);
+	
+	const sigAlgPos = der.slice(serialPos+1,serialPos+2).charCodeAt()+serialPos+2;
+	const issuerPos = der.slice(sigAlgPos+1,sigAlgPos+2).charCodeAt()+sigAlgPos+2;
+	const issuerLength = decodeLength(der,issuerPos+1);
+	const validityPos = issuerLength.length+issuerPos+issuerLength.lengthSize+1;
+	const subjectPos = der.slice(validityPos+1,validityPos+2).charCodeAt()+validityPos+2;
+	const subjectLength = decodeLength(der,subjectPos+1);
+	const keyPos = subjectLength.length+subjectPos+subjectLength.lengthSize+1;
+	const keyLength = decodeLength(der,keyPos+1);
+	const extPos = keyLength.length+keyPos+keyLength.lengthSize+1;
+	const akiPos = der.indexOf("\x06\x03\x55\x1D\x23\x04");
+	const akiLength = decodeLength(der,akiPos+10);
+	const aki = der.slice(akiPos+11,akiPos+11+akiLength.length);
+	
+	const certID = base64url(aki)+"."+base64url(serial.slice(2));
+	return certID;
+};
+
+</script>
+
+</head>
+
+<body>
+
+<h2>Automated Certificate Management Environment (ACME) Renewal Information (ARI) Extension Tool</h2>
+<h3>draft-ietf-acme-ari-<font color="red">03</font></h3>
+
+<p><select id="endpointSelect">
+	<option value="https://dv.acme-v02.test-api.pki.goog/directory">https://dv.acme-v02.test-api.pki.goog/directory</option>
+	<option value="https://dv-sxg.acme-v02.test-api.pki.goog/directory">https://dv-sxg.acme-v02.test-api.pki.goog/directory</option>
+	<option value="https://dv.acme-v02.api.pki.goog/directory">https://dv.acme-v02.api.pki.goog/directory</option>
+	<option value="https://dv-sxg.acme-v02.api.pki.goog/directory">https://dv-sxg.acme-v02.api.pki.goog/directory</option>
+	<option value="https://acme-staging-v02.api.letsencrypt.org/directory">https://acme-staging-v02.api.letsencrypt.org/directory</option>
+	<option value="https://acme-v02.api.letsencrypt.org/directory" selected>https://acme-v02.api.letsencrypt.org/directory</option>
+	<option value="https://api.test4.buypass.no/acme/directory">https://api.test4.buypass.no/acme/directory</option>
+	<option value="https://api.buypass.com/acme/directory">https://api.buypass.com/acme/directory</option>
+	<option value="https://acme.zerossl.com/v2/DV90">https://acme.zerossl.com/v2/DV90</option>
+	<option value="https://acme.ssl.com/sslcom-dv-ecc">https://acme.ssl.com/sslcom-dv-ecc</option>
+	<option value="https://acme.ssl.com/sslcom-dv-rsa">https://acme.ssl.com/sslcom-dv-rsa</option>
+</select><button onclick="fetch(endpointSelect.value).then(r=>r.text().then(t=>{directoryRes.value=t}))">Set Endpoint</button>
+<a href="javascript:window.open(endpointSelect.value)">Open new window</a>
+</p>
+<textarea id="directoryRes" style="width:800px; height:100px" disabled></textarea>
+
+
+<div>
+<div>
+<p>Cert Input</p>
+<textarea id="certInput" style="width:500px; height:200px"></textarea>
+<script>certInput.placeholder="-----BEGIN CERTIFICATE-----\n\n.....\n\n-----END CERTIFICATE-----";</script>
+</div>
+</div>
+<button onclick="requestStatus()">Request Status</button>
+<p>
+<div>Requested ARI URL : <input id="ariURLoutElem" placeholder='ARI URL will be displayed here AFTER you run "Request Status". CORS is NEEDED.' onfocus="this.select()" style="width:600px;" /></div>
+<div>CertID : <input id="ariCertIDoutElem" placeholder='Base64URLencoded CertID will be displayed here AFTER you run "Request Status".' onfocus="this.select()" style="width:600px;" /></div>
+</p>
+
+</body>
+</html>
